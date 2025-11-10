@@ -42,6 +42,8 @@
       <uri>$HELIPAD$</uri>
     </include>
 
+    <!-- Building models as primitive shapes -->
+$BUILDINGS$
 
   </world>
 </sdf>

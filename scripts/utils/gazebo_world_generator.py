@@ -260,11 +260,11 @@ class HeightmapGenerator(ConcatImage):
         # Upsample the heightmap by 4x in each direction (16x total pixels)
         self.upsample_heightmap(output_path, scale_factor=4)
 
-        # Apply building heights from GeoJSON if available
-        # Pass the terrain height range so buildings can be properly scaled
-        building_geojson_path = os.path.join(globalParam.GAZEBO_MODEL_PATH, model, 'buildings.geojson')
-        terrain_height_range = (self.min_height, self.max_height)
-        self.apply_building_heights_to_heightmap(output_path, building_geojson_path, terrain_height_range)
+        # DISABLED: Apply building heights from GeoJSON if available
+        # Buildings are now added as separate primitive shapes instead of modifying the heightmap
+        # building_geojson_path = os.path.join(globalParam.GAZEBO_MODEL_PATH, model, 'buildings.geojson')
+        # terrain_height_range = (self.min_height, self.max_height)
+        # self.apply_building_heights_to_heightmap(output_path, building_geojson_path, terrain_height_range)
 
         # Load the modified heightmap back for Gazebo compatibility
         with rasterio.open(output_path, 'r') as src:
@@ -608,8 +608,12 @@ class GazeboTerrianGenerator(HeightmapGenerator,OrthoGenerator):
         template = FileWriter.read_template(os.path.join(globalParam.TEMPLATE_DIR_PATH ,'gazebo_world.txt'))
         launch_cord = self.get_launch_location()
         helipad_exist = os.path.exists(os.path.join(globalParam.GAZEBO_MODEL_PATH, 'helipad'))
-        FileWriter.write_world_file(template, self.model_name,launch_cord["latitude"],launch_cord["longitude"],os.path.join(globalParam.GAZEBO_MODEL_PATH, self.model_name),launch_cord["altitude"],helipad_exist)
-        FileWriter.write_world_file(template, self.model_name,launch_cord["latitude"],launch_cord["longitude"],globalParam.GAZEBO_WORLD_PATH,launch_cord["altitude"],helipad_exist)
+
+        # Generate building models as primitive shapes
+        buildings_xml = self.generate_building_models_sdf()
+
+        FileWriter.write_world_file(template, self.model_name,launch_cord["latitude"],launch_cord["longitude"],os.path.join(globalParam.GAZEBO_MODEL_PATH, self.model_name),launch_cord["altitude"],helipad_exist,buildings_xml)
+        FileWriter.write_world_file(template, self.model_name,launch_cord["latitude"],launch_cord["longitude"],globalParam.GAZEBO_WORLD_PATH,launch_cord["altitude"],helipad_exist,buildings_xml)
 
     def get_launch_pixelcord(self, south_west_bound, north_east_bound, width, height, launch_location):
         """
@@ -711,6 +715,133 @@ class GazeboTerrianGenerator(HeightmapGenerator,OrthoGenerator):
 
         return self.size_x,self.size_y,self.size_z,pose_x,pose_y,pose_z
 
+
+    def generate_building_models_sdf(self):
+        """
+        Generate SDF model elements for buildings as primitive box shapes.
+
+        Returns:
+            str: XML string containing building model definitions
+        """
+        try:
+            building_geojson_path = os.path.join(
+                globalParam.GAZEBO_MODEL_PATH,
+                self.model_name,
+                'buildings.geojson'
+            )
+
+            if not os.path.exists(building_geojson_path):
+                print("No building data found, skipping building models")
+                return ""
+
+            print("Generating building models as primitive shapes...")
+
+            # Load building GeoJSON
+            with open(building_geojson_path, 'r') as f:
+                buildings = json.load(f)
+
+            # Get origin coordinates for converting lat/lon to local ENU
+            origin = self.get_true_origin()
+
+            # Parse boundaries for terrain extents
+            bound_array = self.boundaries.split(',')
+            true_boundaries = maptile_utiles.get_true_boundaries(bound_array, self.zoom_level)
+
+            building_models_xml = []
+            building_count = 0
+
+            # Process each building
+            for feature in buildings.get('features', []):
+                properties = feature.get('properties', {})
+
+                # Skip if not a building or no height data
+                if properties.get('type') != 'building':
+                    continue
+
+                height = properties.get('height', 0)
+                if height <= 0:
+                    continue
+
+                # Get the polygon geometry
+                geom = feature.get('geometry')
+                if not geom or geom.get('type') != 'Polygon':
+                    continue
+
+                # Create shapely polygon
+                polygon = shape(geom)
+
+                # Get building centroid and bounds for size calculation
+                centroid = polygon.centroid
+                building_lon, building_lat = centroid.x, centroid.y
+
+                # Calculate building size from bounding box
+                minx, miny, maxx, maxy = polygon.bounds
+
+                # Convert corner coordinates to meters to get size
+                sw_corner = {"latitude": miny, "longitude": minx}
+                se_corner = {"latitude": miny, "longitude": maxx}
+                nw_corner = {"latitude": maxy, "longitude": minx}
+
+                building_width = geodesic((miny, minx), (miny, maxx)).meters
+                building_length = geodesic((miny, minx), (maxy, minx)).meters
+
+                # Convert building position to ENU coordinates relative to origin
+                building_coord = {"latitude": building_lat, "longitude": building_lon}
+                pose_x, pose_y = self.get_offset(origin, building_coord)
+
+                # Get terrain height at building location
+                terrain_height = self.get_amsl(building_lat, building_lon)
+                if terrain_height is None:
+                    print(f"Warning: Could not get terrain height for building at {building_lat}, {building_lon}")
+                    continue
+
+                # Calculate building base height relative to origin
+                # Origin altitude is already at self.min_height
+                # pose_z should position the base of the building at terrain height
+                pose_z = terrain_height - origin["altitude"] + height / 2.0
+
+                # Generate unique building name
+                building_name = f"building_{building_count}"
+                building_count += 1
+
+                # Create SDF model for this building
+                building_xml = f"""
+    <model name="{building_name}">
+      <static>true</static>
+      <pose>{pose_x} {pose_y} {pose_z} 0 0 0</pose>
+      <link name="building_link">
+        <collision name="collision">
+          <geometry>
+            <box>
+              <size>{building_width} {building_length} {height}</size>
+            </box>
+          </geometry>
+        </collision>
+        <visual name="visual">
+          <geometry>
+            <box>
+              <size>{building_width} {building_length} {height}</size>
+            </box>
+          </geometry>
+          <material>
+            <ambient>0.7 0.7 0.7 1</ambient>
+            <diffuse>0.8 0.8 0.8 1</diffuse>
+            <specular>0.1 0.1 0.1 1</specular>
+          </material>
+        </visual>
+      </link>
+    </model>"""
+
+                building_models_xml.append(building_xml)
+
+            print(f"Generated {building_count} building models as primitive shapes")
+            return "\n".join(building_models_xml)
+
+        except Exception as e:
+            print(f"Warning: Failed to generate building models: {e}")
+            import traceback
+            traceback.print_exc()
+            return ""
 
     def download_buildings(self):
         """

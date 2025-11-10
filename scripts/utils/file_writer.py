@@ -235,7 +235,7 @@ class FileWriter:
 
 		
 	@staticmethod
-	def write_world_file(sdf_template,model_name,launch_lat,launch_lon,path,origin_height,helipad_exist):
+	def write_world_file(sdf_template,model_name,launch_lat,launch_lon,path,origin_height,helipad_exist,buildings_xml=""):
 		'''
 		Write a world file with the provided template and model details.
 
@@ -246,6 +246,7 @@ class FileWriter:
             origin_long (float): The origin longitude.
             path (str): The directory path to save the world file.
 			helipad_exist (bool): Flag indicating if the helipad model locally or not.
+			buildings_xml (str, optional): XML string containing building models. Defaults to "".
         Returns:
             None
 
@@ -255,13 +256,14 @@ class FileWriter:
 		sdf_template = sdf_template.replace("$ORIGIN_LAT$", str(launch_lat))
 		sdf_template = sdf_template.replace("$ORIGIN_LONG$", str(launch_lon))
 		sdf_template = sdf_template.replace("$ORIGIN_ELEVATION$", str(origin_height))
-		
+		sdf_template = sdf_template.replace("$BUILDINGS$", buildings_xml)
+
     	# Open file
 		if helipad_exist:
 			sdf_template = sdf_template.replace("$HELIPAD$", str("model://helipad"))
 		else:
 			sdf_template = sdf_template.replace("$HELIPAD$", globalParam.HELIPAD_MODEL)
-    	
+
 		# Ensure results are a string
 		sdf_content = str(sdf_template)
 		target = open(os.path.join(path,model_name+".sdf"), "w")
