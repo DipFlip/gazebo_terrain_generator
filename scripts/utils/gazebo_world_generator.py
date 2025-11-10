@@ -719,6 +719,7 @@ class GazeboTerrianGenerator(HeightmapGenerator,OrthoGenerator):
     def generate_building_models_sdf(self):
         """
         Generate SDF model elements for buildings as primitive box shapes.
+        Uses the heightmap to get terrain height instead of querying DEM for each building.
 
         Returns:
             str: XML string containing building model definitions
@@ -746,6 +747,15 @@ class GazeboTerrianGenerator(HeightmapGenerator,OrthoGenerator):
             # Parse boundaries for terrain extents
             bound_array = self.boundaries.split(',')
             true_boundaries = maptile_utiles.get_true_boundaries(bound_array, self.zoom_level)
+
+            # Get heightmap dimensions
+            heightmap_width, heightmap_height = self.heightmap.size
+
+            # Geographic bounds
+            south = true_boundaries["southwest"][0]
+            west = true_boundaries["southwest"][1]
+            north = true_boundaries["northeast"][0]
+            east = true_boundaries["northeast"][1]
 
             building_models_xml = []
             building_count = 0
@@ -777,11 +787,6 @@ class GazeboTerrianGenerator(HeightmapGenerator,OrthoGenerator):
                 # Calculate building size from bounding box
                 minx, miny, maxx, maxy = polygon.bounds
 
-                # Convert corner coordinates to meters to get size
-                sw_corner = {"latitude": miny, "longitude": minx}
-                se_corner = {"latitude": miny, "longitude": maxx}
-                nw_corner = {"latitude": maxy, "longitude": minx}
-
                 building_width = geodesic((miny, minx), (miny, maxx)).meters
                 building_length = geodesic((miny, minx), (maxy, minx)).meters
 
@@ -789,16 +794,25 @@ class GazeboTerrianGenerator(HeightmapGenerator,OrthoGenerator):
                 building_coord = {"latitude": building_lat, "longitude": building_lon}
                 pose_x, pose_y = self.get_offset(origin, building_coord)
 
-                # Get terrain height at building location
-                terrain_height = self.get_amsl(building_lat, building_lon)
-                if terrain_height is None:
-                    print(f"Warning: Could not get terrain height for building at {building_lat}, {building_lon}")
-                    continue
+                # Get terrain height from heightmap at building location
+                # Convert lat/lon to pixel coordinates in heightmap
+                px = int((building_lon - west) / (east - west) * heightmap_width)
+                py = int((north - building_lat) / (north - south) * heightmap_height)
 
-                # Calculate building base height relative to origin
-                # Origin altitude is already at self.min_height
-                # pose_z should position the base of the building at terrain height
-                pose_z = terrain_height - origin["altitude"] + height / 2.0
+                # Ensure pixel coordinates are within bounds
+                px = max(0, min(heightmap_width - 1, px))
+                py = max(0, min(heightmap_height - 1, py))
+
+                # Get normalized height value from heightmap (0-255)
+                heightmap_value = self.heightmap.getpixel((px, py))
+
+                # Convert to actual terrain height in meters
+                # heightmap is normalized: 0 = min_height, 255 = max_height
+                terrain_height_local = (heightmap_value / 255.0) * self.size_z
+
+                # Calculate building center height (terrain + half building height)
+                # Box center is at pose_z, so we need to account for that
+                pose_z = terrain_height_local + height / 2.0
 
                 # Generate unique building name
                 building_name = f"building_{building_count}"
