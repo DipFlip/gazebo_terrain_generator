@@ -28,7 +28,7 @@ def random_string():
 
 	return uuid.uuid4().hex.upper()[0:6]
 
-def process_end_download(bounds, zoom_level, outputDirectory, outputFile, filePath):
+def process_end_download(bounds, zoom_level, outputDirectory, outputFile, filePath, include_buildings):
 	global task_status
 	try:
 		task_status["status"] = "in_progress"
@@ -38,7 +38,7 @@ def process_end_download(bounds, zoom_level, outputDirectory, outputFile, filePa
 		download_dem_data(true_boundaries, os.path.join(globalParam.OUTPUT_BASE_PATH, "dem"))
 		orthodir_path = os.path.join(globalParam.OUTPUT_BASE_PATH, outputDirectory)
 		terrian_generator = GazeboTerrianGenerator(orthodir_path)
-		terrian_generator.generate_gazebo_world()
+		terrian_generator.generate_gazebo_world(include_buildings=include_buildings)
 		task_status["status"] = "completed"
 		print("Gazebo world generation completed successfully.")
 
@@ -140,6 +140,7 @@ def start_download():
 	center = list(map(float, postvars['center'].split(",")))
 	area_rect = postvars['area']
 	launchLocation = list(map(float, postvars['launchLocation'].split(",")))
+	include_buildings = postvars.get('includeBuildings', 'true').lower() == 'true'
 
 	outputDirectory = outputDirectory.replace("{timestamp}", str(timestamp))
 	outputFile = outputFile.replace("{timestamp}", str(timestamp))
@@ -150,12 +151,15 @@ def start_download():
 		"Map Tiles Downloader via AliFlux", "jpg", bounds, center, area_rect,
 		zoom_level, "mercator", 256 * outputScale, launchLocation=launchLocation
 	)
+
+	# Store the include_buildings preference for use in end_download
 	global task_status
-	task_status = {"status": "idle"} 
+	task_status = {"status": "idle", "include_buildings": include_buildings}
 	return jsonify({"code": 200, "message": "Metadata written"})
 
 @app.route('/end-download', methods=['POST'])
 def end_download():
+	global task_status
 	postvars = request.form
 	outputDirectory = postvars['outputDirectory']
 	outputFile = postvars['outputFile']
@@ -163,13 +167,16 @@ def end_download():
 	timestamp = int(postvars['timestamp'])
 	bounds = list(map(float, postvars['bounds'].split(",")))
 
+	# Retrieve the include_buildings preference from task_status
+	include_buildings = task_status.get("include_buildings", True)
+
 	outputDirectory = outputDirectory.replace("{timestamp}", str(timestamp))
 	outputFile = outputFile.replace("{timestamp}", str(timestamp))
 	filePath = os.path.join(globalParam.OUTPUT_BASE_PATH, outputDirectory, outputFile)
 
 	FileWriter.close(lock, os.path.join(globalParam.OUTPUT_BASE_PATH, outputDirectory), filePath, zoom_level)
     # Start the long-running task in a background thread
-	thread = threading.Thread(target=process_end_download, args=(bounds, zoom_level, outputDirectory, outputFile, filePath))
+	thread = threading.Thread(target=process_end_download, args=(bounds, zoom_level, outputDirectory, outputFile, filePath, include_buildings))
 	thread.start()
 
 	return jsonify({"code": 200, "message": "Download ended"})

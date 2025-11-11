@@ -595,11 +595,12 @@ class GazeboTerrianGenerator(HeightmapGenerator,OrthoGenerator):
         template = FileWriter.read_template(os.path.join(globalParam.TEMPLATE_DIR_PATH ,'config_temp.txt'))
         FileWriter.write_config_file(template, self.model_name, os.path.join(globalParam.GAZEBO_MODEL_PATH, self.model_name))
     
-    def gen_world(self) -> None:
+    def gen_world(self, include_buildings=True) -> None:
         """
         Generate the gazebo world file.
 
         Args:
+            include_buildings (bool): Whether to include building models in the world. Defaults to True.
 
         Returns:
             None
@@ -609,8 +610,12 @@ class GazeboTerrianGenerator(HeightmapGenerator,OrthoGenerator):
         launch_cord = self.get_launch_location()
         helipad_exist = os.path.exists(os.path.join(globalParam.GAZEBO_MODEL_PATH, 'helipad'))
 
-        # Generate building models as primitive shapes
-        buildings_xml = self.generate_building_models_sdf()
+        # Generate building models as primitive shapes if enabled
+        buildings_xml = ""
+        if include_buildings:
+            buildings_xml = self.generate_building_models_sdf()
+        else:
+            print("Buildings disabled - skipping building model generation...")
 
         FileWriter.write_world_file(template, self.model_name,launch_cord["latitude"],launch_cord["longitude"],os.path.join(globalParam.GAZEBO_MODEL_PATH, self.model_name),launch_cord["altitude"],helipad_exist,buildings_xml)
         FileWriter.write_world_file(template, self.model_name,launch_cord["latitude"],launch_cord["longitude"],globalParam.GAZEBO_WORLD_PATH,launch_cord["altitude"],helipad_exist,buildings_xml)
@@ -920,15 +925,22 @@ class GazeboTerrianGenerator(HeightmapGenerator,OrthoGenerator):
             print("Continuing without building data...")
             return None
 
-    def generate_gazebo_world(self):
+    def generate_gazebo_world(self, include_buildings=True):
         """
             Generate the gazebo world along with world files.
+
+            Args:
+                include_buildings (bool): Whether to include building models in the world. Defaults to True.
         """
 
         print("Map tiles directory being used : ",self.tile_path)
         if os.path.isfile(os.path.join(self.tile_path, 'metadata.json')) and self.tile_path != '':
-            # Download building data BEFORE generating heightmap so buildings can be integrated
-            self.download_buildings()
+            # Download building data if buildings are enabled
+            if include_buildings:
+                print("Buildings enabled - downloading building data...")
+                self.download_buildings()
+            else:
+                print("Buildings disabled - skipping building data download...")
 
             self.generate_ortho(self.tile_path,self.zoom_level,self.model_name,self.boundaries)
             print("Satellite image generated successfully")
@@ -940,7 +952,7 @@ class GazeboTerrianGenerator(HeightmapGenerator,OrthoGenerator):
             self.gen_sdf(size_x,size_y,size_z,pose_x,posey,posez)
             maptile_utiles.dir_check(globalParam.GAZEBO_WORLD_PATH)
 
-            self.gen_world()
+            self.gen_world(include_buildings=include_buildings)
             print("Generate gazebo model files are save to : ",os.path.join(globalParam.GAZEBO_MODEL_PATH,os.path.basename(self.tile_path)))
             print("Generate gazebo world file are save to : ",globalParam.GAZEBO_WORLD_PATH)
 
